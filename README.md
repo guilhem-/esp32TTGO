@@ -1,2 +1,2 @@
 # esp32TTGO
-basic demo setup
+Basic demo setup
