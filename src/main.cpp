@@ -28,15 +28,9 @@
 // For a connection via I2C using Wire include
 #include <Wire.h>  // Only needed for Arduino 1.6.5 and earlier
 #include "SSD1306.h" // alias for `#include "SSD1306Wire.h"`
-// or #include "SH1106.h" alis for `#include "SH1106Wire.h"`
-// For a connection via I2C using brzo_i2c (must be installed) include
-// #include <brzo_i2c.h> // Only needed for Arduino 1.6.5 and earlier
-// #include "SSD1306Brzo.h"
-// #include "SH1106Brzo.h"
-// For a connection via SPI include
-// #include <SPI.h> // Only needed for Arduino 1.6.5 and earlier
-// #include "SSD1306Spi.h"
-// #include "SH1106SPi.h"
+#include "ESPAsyncWebServer.h"
+#include <DNSServer.h>
+
 
 // Include custom images
 #include "images.h"
@@ -48,23 +42,45 @@
 // D2 -> DC
 // D8 -> CS
 // SSD1306Spi        display(D0, D2, D8);
-// or
-// SH1106Spi         display(D0, D2);
-
-// Initialize the OLED display using brzo_i2c
-// D3 -> SDA
-// D5 -> SCL
-// SSD1306Brzo display(0x3c, D3, D5);
-// or
-// SH1106Brzo  display(0x3c, D3, D5);
-
-// Initialize the OLED display using Wire library
 SSD1306  display(0x3c, 5, 4); //5,4  21,22 4,15
-// SH1106 display(0x3c, D3, D5);
 
+IPAddress apIP(192, 168, 1, 1);
+DNSServer dnsServer;
+#define DNS_PORT 53
 
 #define DEMO_DURATION 3000
 typedef void (*Demo)(void);
+
+#include "SPIFFS.h"
+
+// Replace with your network credentials
+const char* ssid = "DISMOITOUT";
+const char* password = "";
+
+// Set LED GPIO
+const int ledPin = 2;
+// Stores LED state
+String ledState;
+
+// Create AsyncWebServer object on port 80
+AsyncWebServer server(80);
+
+// Replaces placeholder with LED state value
+String processor(const String& var){
+  Serial.println(var);
+  if(var == "STATE"){
+    if(digitalRead(ledPin)){
+      ledState = "ON";
+    }
+    else{
+      ledState = "OFF";
+    }
+    Serial.print(ledState);
+    return ledState;
+  }
+  return String();
+}
+ 
 
 int demoMode = 0;
 int counter = 1;
@@ -81,6 +97,58 @@ void setup() {
   display.flipScreenVertically();
   display.setFont(ArialMT_Plain_10);
 
+
+  // Initialize SPIFFS
+  if(!SPIFFS.begin(true)){
+    Serial.println("An Error has occurred while mounting SPIFFS");
+    return;
+  }
+
+WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+  WiFi.softAP(ssid);
+
+  // if DNSServer is started with "*" for domain name, it will reply with
+  // provided IP to all DNS request
+  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+  dnsServer.start(DNS_PORT, "*", apIP);
+
+  // Connect to Wi-Fi
+  // WiFi.begin(ssid, password);
+  // while (WiFi.status() != WL_CONNECTED) {
+  //   delay(1000);
+  //   Serial.println("Connecting to WiFi..");
+  // }
+
+  IPAddress myIP = WiFi.softAPIP();
+  Serial.println();
+  Serial.print("AP IP address: ");
+  Serial.println(myIP);
+
+  // Route for root / web page
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(SPIFFS, "/index.html", String(), false, processor);
+  });
+  
+  // Route to load style.css file
+  server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(SPIFFS, "/style.css", "text/css");
+  });
+
+  // Route to set GPIO to HIGH
+  server.on("/on", HTTP_GET, [](AsyncWebServerRequest *request){
+    digitalWrite(ledPin, HIGH);    
+    request->send(SPIFFS, "/index.html", String(), false, processor);
+  });
+  
+  // Route to set GPIO to LOW
+  server.on("/off", HTTP_GET, [](AsyncWebServerRequest *request){
+    digitalWrite(ledPin, LOW);    
+    request->send(SPIFFS, "/index.html", String(), false, processor);
+  });
+
+  // Start server
+  server.begin();
 }
 
 void drawFontFaceDemo() {
@@ -169,6 +237,8 @@ int demoLength = (sizeof(demos) / sizeof(Demo));
 long timeSinceLastModeSwitch = 0;
 
 void loop() {
+  dnsServer.processNextRequest();
+
   // clear the display
   display.clear();
   // draw the current demo method
